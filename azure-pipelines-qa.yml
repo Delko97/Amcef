@@ -1,1 +1,83 @@
-// Azure devops & docker code
+name: 'CypressQA tests'
+
+pool:
+  name: agent
+
+trigger:
+  - main
+
+schedules:
+  - cron: "0 4 * * *"
+    displayName: QA tests at 6am
+    branches:
+      include:
+        - main
+
+parameters:
+  - name: testsGroup
+    displayName: Tests Filter
+    type: string
+    default: ' '
+    values:
+      - '@positive'
+      - '@smoke'
+      - '@campaign'
+      - '@statistics'
+      - '@only'
+      - ' '
+
+variables:
+  - name: CACHE
+    value: $[format('{0:yyyy}-{0:MM}-{0:dd}T{0:HH}:{0:mm}:{0:ss}', pipeline.startTime)]
+
+stages:
+  - stage: Build_and_publish_results
+    displayName: Building docker
+    jobs:
+      - job: Build_positive1
+        timeoutInMinutes: 30
+        steps:
+          - task: Docker@2
+            condition: always()
+            inputs:
+              command: 'build'
+              dockerFile: '$(System.DefaultWorkingDirectory)/Dockerfile'
+              buildContext: '$(System.DefaultWorkingDirectory)'
+              arguments: '--build-arg DBPASSWORD=$(dbpassword) --build-arg LABEL=STAGE1 --build-arg PASSWORD=$(password) --build-arg MSPPASSWORD=$(mspPassword) --build-arg GREPTAGS=${{ parameters.testsGroup }} --build-arg CACHEBUST="$(CACHE)" --build-arg SPEC="cypress/e2e/testsuites/positiveStage1.cy.js"'
+              tags: '$(Build.BuildNumber)'
+              displayName: 'Build the Docker image 1st stage positive tests'
+
+          - pwsh: |
+              $id=docker images --filter "label=mcpTests=STAGE1" -q | Select-Object -First 1
+              docker create --name testcontainer $id
+              docker cp testcontainer:/app/cypress/reports_qa/ $(System.DefaultWorkingDirectory)/cypress/reports_qa/
+              docker cp testcontainer:/app/cypress/videos/ $(System.DefaultWorkingDirectory)/cypress/videos/
+              docker cp testcontainer:/app/cypress/screenshots/ $(System.DefaultWorkingDirectory)/cypress/screenshots/
+              docker rm testcontainer
+            condition: always()
+            displayName: 'Run container and copy test results 1st stage'
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFiles: '**/junit.*.xml'
+              mergeTestResults: true
+              searchFolder: $(System.DefaultWorkingDirectory)/cypress/reports_qa/
+              failTaskOnFailedTests: true
+              testRunTitle: 'Publish QA Test Results stage 1'
+              failOnStderr: true
+            condition: always()
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish screenshots'
+            inputs:
+              pathtoPublish: 'cypress/screenshots'
+              artifactName: screenshots
+            condition: always()
+            continueOnError: true
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish videos'
+            inputs:
+              pathtoPublish: 'cypress/videos'
+              artifactName: videos
+            condition: always()
+            continueOnError: true
